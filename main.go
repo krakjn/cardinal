@@ -17,30 +17,41 @@ type DDSMessage struct {
 	Timestamp time.Time
 }
 
-// Simple DDS-like message channel (simulating Fast DDS for now)
-type DDSPublisher struct {
+// Interface for DDS publishers
+type DDSPublisher interface {
+	Publish(msg DDSMessage) error
+}
+
+// Interface for DDS subscribers
+type DDSSubscriber interface {
+	Subscribe() <-chan DDSMessage
+}
+
+// Simple DDS-like message channel (simulating Fast DDS for fallback)
+type MockDDSPublisher struct {
 	topic   string
 	channel chan DDSMessage
 }
 
-type DDSSubscriber struct {
+type MockDDSSubscriber struct {
 	topic   string
 	channel chan DDSMessage
 }
 
 // Create a simple DDS-like system
-func NewDDSSystem() (*DDSPublisher, *DDSSubscriber) {
+func NewDDSSystem() (*MockDDSPublisher, *MockDDSSubscriber) {
 	channel := make(chan DDSMessage, 100)
-	pub := &DDSPublisher{topic: "hello_topic", channel: channel}
-	sub := &DDSSubscriber{topic: "hello_topic", channel: channel}
+	pub := &MockDDSPublisher{topic: "hello_topic", channel: channel}
+	sub := &MockDDSSubscriber{topic: "hello_topic", channel: channel}
 	return pub, sub
 }
 
-func (p *DDSPublisher) Publish(msg DDSMessage) {
+func (p *MockDDSPublisher) Publish(msg DDSMessage) error {
 	p.channel <- msg
+	return nil
 }
 
-func (s *DDSSubscriber) Subscribe() <-chan DDSMessage {
+func (s *MockDDSSubscriber) Subscribe() <-chan DDSMessage {
 	return s.channel
 }
 
@@ -118,9 +129,9 @@ func (m model) View() string {
 }
 
 // Hello World Publisher Thread
-func helloWorldPublisher(ctx context.Context, pub *DDSPublisher, wg *sync.WaitGroup) {
+func helloWorldPublisher(ctx context.Context, pub DDSPublisher, wg *sync.WaitGroup) {
 	defer wg.Done()
-	
+
 	counter := 0
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -136,18 +147,21 @@ func helloWorldPublisher(ctx context.Context, pub *DDSPublisher, wg *sync.WaitGr
 				Content:   fmt.Sprintf("Hello World #%d", counter),
 				Timestamp: time.Now(),
 			}
-			pub.Publish(msg)
-			log.Printf("Published: %s\n", msg.Content)
+			if err := pub.Publish(msg); err != nil {
+				log.Printf("Error publishing: %v", err)
+			} else {
+				log.Printf("Published: %s\n", msg.Content)
+			}
 		}
 	}
 }
 
 // TUI Subscriber Thread
-func tuiSubscriber(ctx context.Context, sub *DDSSubscriber, program *tea.Program, wg *sync.WaitGroup) {
+func tuiSubscriber(ctx context.Context, sub DDSSubscriber, program *tea.Program, wg *sync.WaitGroup) {
 	defer wg.Done()
-	
+
 	msgChan := sub.Subscribe()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -161,30 +175,46 @@ func tuiSubscriber(ctx context.Context, sub *DDSSubscriber, program *tea.Program
 }
 
 func main() {
-	// Create DDS system
-	pub, sub := NewDDSSystem()
-	
+	// Try real DDS first, fallback to mock
+	realPub, realSub, err := NewRealDDSSystem(0, "hello_topic")
+	if err != nil {
+		// Fallback to mock DDS
+		fmt.Println("⚠️ Real DDS failed, using mock DDS:", err)
+		mockPub, mockSub := NewDDSSystem()
+		runApplication(mockPub, mockSub)
+	} else {
+		fmt.Println("✅ Using real Fast DDS!")
+
+		// Cleanup real DDS on exit
+		defer realPub.Cleanup()
+		defer realSub.Cleanup()
+
+		runApplication(realPub, realSub)
+	}
+}
+
+func runApplication(pub DDSPublisher, sub DDSSubscriber) {
 	// Create TUI model
 	m := model{
 		messages: []DDSMessage{},
 		style:    lipgloss.NewStyle(),
 	}
-	
+
 	// Create Bubble Tea program
 	program := tea.NewProgram(m, tea.WithAltScreen())
-	
+
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	
+
 	// Start the hello world publisher thread
 	wg.Add(1)
 	go helloWorldPublisher(ctx, pub, &wg)
-	
+
 	// Start the TUI subscriber thread
 	wg.Add(1)
 	go tuiSubscriber(ctx, sub, program, &wg)
-	
+
 	// Handle program termination
 	go func() {
 		if _, err := program.Run(); err != nil {
@@ -192,9 +222,9 @@ func main() {
 		}
 		cancel() // Signal all goroutines to stop
 	}()
-	
+
 	// Wait for all goroutines to finish
 	wg.Wait()
-	
+
 	fmt.Println("Cardinal application terminated.")
-} 
+}

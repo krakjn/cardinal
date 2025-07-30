@@ -1,36 +1,32 @@
-#ifndef FASTDDS_H
-#define FASTDDS_H
+#ifndef FASTDDS_SIMPLE_H
+#define FASTDDS_SIMPLE_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Simple C interface for Fast DDS
+// Simple message structure
 typedef struct {
-    char content[256];
+    char message[256];
     long timestamp;
-} HelloWorldMsg;
+} SimpleMessage;
 
-typedef void* DDSPublisher_t;
-typedef void* DDSSubscriber_t;
-typedef void* DDSDomainParticipant_t;
+// Opaque handles for C interface
+typedef void* SimpleDDSPublisher;
+typedef void* SimpleDDSSubscriber;
 
 // Publisher functions
-DDSDomainParticipant_t* create_participant(int domain_id);
-DDSPublisher_t* create_publisher(DDSDomainParticipant_t* participant, const char* topic_name);
-int publish_message(DDSPublisher_t* publisher, const char* content, long timestamp);
-void destroy_publisher(DDSPublisher_t* publisher);
+SimpleDDSPublisher create_simple_publisher(const char* topic_name);
+int publish_simple_message(SimpleDDSPublisher pub, const char* message, long timestamp);
+void destroy_simple_publisher(SimpleDDSPublisher pub);
 
-// Subscriber functions  
-DDSSubscriber_t* create_subscriber(DDSDomainParticipant_t* participant, const char* topic_name);
-int receive_message(DDSSubscriber_t* subscriber, HelloWorldMsg* msg, int timeout_ms);
-void destroy_subscriber(DDSSubscriber_t* subscriber);
-
-// Cleanup
-void destroy_participant(DDSDomainParticipant_t* participant);
+// Subscriber functions
+SimpleDDSSubscriber create_simple_subscriber(const char* topic_name);
+int receive_simple_message(SimpleDDSSubscriber sub, SimpleMessage* msg);
+void destroy_simple_subscriber(SimpleDDSSubscriber sub);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // FASTDDS_H 
+#endif // FASTDDS_SIMPLE_H 

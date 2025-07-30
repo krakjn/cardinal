@@ -1,84 +1,111 @@
 #include "fastdds.h"
 #include <fastdds/dds/domain/DomainParticipantFactory.hpp>
 #include <fastdds/dds/domain/DomainParticipant.hpp>
-#include <fastdds/dds/topic/TypeSupport.hpp>
 #include <fastdds/dds/publisher/Publisher.hpp>
 #include <fastdds/dds/publisher/DataWriter.hpp>
 #include <fastdds/dds/subscriber/Subscriber.hpp>
 #include <fastdds/dds/subscriber/DataReader.hpp>
+#include <fastdds/dds/topic/Topic.hpp>
+#include <fastdds/dds/topic/TypeSupport.hpp>
 #include <fastdds/dds/subscriber/SampleInfo.hpp>
-#include <cstring>
-#include <chrono>
+#include <string>
+#include <iostream>
+#include <memory>
 
 using namespace eprosima::fastdds::dds;
 
-// HelloWorld message type for Fast DDS
-class HelloWorldMsgType
-{
+// Simple message class for Fast DDS
+class SimpleMessageData {
 public:
-    std::string content;
+    std::string message;
     int64_t timestamp;
-    
-    HelloWorldMsgType() = default;
-    HelloWorldMsgType(const std::string& content, int64_t timestamp)
-        : content(content), timestamp(timestamp) {}
+
+    SimpleMessageData() = default;
+    SimpleMessageData(const std::string& msg, int64_t ts) : message(msg), timestamp(ts) {}
 };
 
-// TypeSupport implementation (simplified)
-class HelloWorldMsgTypeSupport : public TopicDataType
-{
+// Simplified TypeSupport for demo purposes
+class SimpleMessageTypeSupport : public TopicDataType {
 public:
-    HelloWorldMsgTypeSupport() 
-    {
-        setName("HelloWorldMsg");
-        m_typeSize = 264; // 256 + 8 bytes
+    SimpleMessageTypeSupport() {
+        set_name("SimpleMessage");
+        max_serialized_type_size = 300; // 256 + some overhead
+        is_compute_key_provided = false;
     }
 
-    bool serialize(void* data, SerializedPayload_t* payload) override
-    {
-        HelloWorldMsgType* msg = static_cast<HelloWorldMsgType*>(data);
-        // Simplified serialization - in real implementation you'd use proper serialization
-        memcpy(payload->data, msg->content.c_str(), std::min(msg->content.size(), size_t(255)));
-        payload->data[255] = '\0';
-        memcpy(payload->data + 256, &msg->timestamp, sizeof(int64_t));
-        payload->length = 264;
+    bool serialize(const void* data, SerializedPayload_t& payload, DataRepresentationId_t representation) override {
+        const SimpleMessageData* msg_data = static_cast<const SimpleMessageData*>(data);
+        
+        // Simple serialization: message length + message + timestamp
+        uint32_t msg_len = static_cast<uint32_t>(msg_data->message.length());
+        
+        payload.reserve(sizeof(uint32_t) + msg_len + sizeof(int64_t));
+        payload.pos = 0;
+        
+        // Serialize message length
+        memcpy(payload.data + payload.pos, &msg_len, sizeof(uint32_t));
+        payload.pos += sizeof(uint32_t);
+        
+        // Serialize message
+        memcpy(payload.data + payload.pos, msg_data->message.c_str(), msg_len);
+        payload.pos += msg_len;
+        
+        // Serialize timestamp
+        memcpy(payload.data + payload.pos, &msg_data->timestamp, sizeof(int64_t));
+        payload.pos += sizeof(int64_t);
+        
+        payload.length = payload.pos;
         return true;
     }
 
-    bool deserialize(SerializedPayload_t* payload, void* data) override
-    {
-        HelloWorldMsgType* msg = static_cast<HelloWorldMsgType*>(data);
-        char content[256];
-        memcpy(content, payload->data, 256);
-        content[255] = '\0';
-        msg->content = std::string(content);
-        memcpy(&msg->timestamp, payload->data + 256, sizeof(int64_t));
+    bool deserialize(SerializedPayload_t& payload, void* data) override {
+        SimpleMessageData* msg_data = static_cast<SimpleMessageData*>(data);
+        
+        payload.pos = 0;
+        
+        // Deserialize message length
+        uint32_t msg_len;
+        memcpy(&msg_len, payload.data + payload.pos, sizeof(uint32_t));
+        payload.pos += sizeof(uint32_t);
+        
+        // Deserialize message
+        char buffer[256];
+        memcpy(buffer, payload.data + payload.pos, std::min(msg_len, 255u));
+        buffer[std::min(msg_len, 255u)] = '\0';
+        msg_data->message = std::string(buffer);
+        payload.pos += msg_len;
+        
+        // Deserialize timestamp
+        memcpy(&msg_data->timestamp, payload.data + payload.pos, sizeof(int64_t));
+        payload.pos += sizeof(int64_t);
+        
         return true;
     }
 
-    std::function<uint32_t()> getSerializedSizeProvider(void* data) override
-    {
-        return []() -> uint32_t { return 264; };
+    uint32_t calculate_serialized_size(const void* data, DataRepresentationId_t representation) override {
+        const SimpleMessageData* msg_data = static_cast<const SimpleMessageData*>(data);
+        return sizeof(uint32_t) + msg_data->message.length() + sizeof(int64_t);
     }
 
-    void* createData() override
-    {
-        return new HelloWorldMsgType();
+    void* create_data() override {
+        return new SimpleMessageData();
     }
 
-    void deleteData(void* data) override
-    {
-        delete static_cast<HelloWorldMsgType*>(data);
+    void delete_data(void* data) override {
+        delete static_cast<SimpleMessageData*>(data);
     }
 
-    bool getKey(void* data, InstanceHandle_t* handle, bool force_md5) override
-    {
+    bool compute_key(SerializedPayload_t& payload, InstanceHandle_t& handle, bool force_md5) override {
+        return true;
+    }
+
+    bool compute_key(const void* data, InstanceHandle_t& handle, bool force_md5) override {
         return true;
     }
 };
 
-// Wrapper structures
-struct DDSPublisherWrapper {
+// Publisher wrapper
+struct SimplePublisherWrapper {
     DomainParticipant* participant;
     Publisher* publisher;
     Topic* topic;
@@ -86,7 +113,8 @@ struct DDSPublisherWrapper {
     TypeSupport type_support;
 };
 
-struct DDSSubscriberWrapper {
+// Subscriber wrapper
+struct SimpleSubscriberWrapper {
     DomainParticipant* participant;
     Subscriber* subscriber;
     Topic* topic;
@@ -96,107 +124,171 @@ struct DDSSubscriberWrapper {
 
 extern "C" {
 
-DDSDomainParticipant_t* create_participant(int domain_id) {
-    DomainParticipantQos pqos;
-    pqos.name("Cardinal_Participant");
-    
-    DomainParticipant* participant = DomainParticipantFactory::get_instance()->create_participant(
-        domain_id, pqos);
-    
-    return static_cast<DDSDomainParticipant_t*>(participant);
-}
+SimpleDDSPublisher create_simple_publisher(const char* topic_name) {
+    try {
+        // Create participant
+        DomainParticipant* participant = DomainParticipantFactory::get_instance()->create_participant(
+            0, PARTICIPANT_QOS_DEFAULT);
+        if (!participant) {
+            std::cerr << "Failed to create participant" << std::endl;
+            return nullptr;
+        }
 
-DDSPublisher_t* create_publisher(DDSDomainParticipant_t* participant_ptr, const char* topic_name) {
-    DomainParticipant* participant = static_cast<DomainParticipant*>(participant_ptr);
-    
-    DDSPublisherWrapper* wrapper = new DDSPublisherWrapper();
-    wrapper->participant = participant;
-    wrapper->type_support = TypeSupport(new HelloWorldMsgTypeSupport());
-    
-    // Register type
-    wrapper->type_support.register_type(participant);
-    
-    // Create topic
-    wrapper->topic = participant->create_topic(topic_name, "HelloWorldMsg", TOPIC_QOS_DEFAULT);
-    
-    // Create publisher
-    wrapper->publisher = participant->create_publisher(PUBLISHER_QOS_DEFAULT);
-    
-    // Create writer
-    wrapper->writer = wrapper->publisher->create_datawriter(wrapper->topic, DATAWRITER_QOS_DEFAULT);
-    
-    return static_cast<DDSPublisher_t*>(wrapper);
-}
+        // Create wrapper
+        SimplePublisherWrapper* wrapper = new SimplePublisherWrapper();
+        wrapper->participant = participant;
+        wrapper->type_support = TypeSupport(new SimpleMessageTypeSupport());
 
-int publish_message(DDSPublisher_t* publisher_ptr, const char* content, long timestamp) {
-    DDSPublisherWrapper* wrapper = static_cast<DDSPublisherWrapper*>(publisher_ptr);
-    
-    HelloWorldMsgType msg(std::string(content), timestamp);
-    return wrapper->writer->write(&msg) == ReturnCode_t::RETCODE_OK ? 0 : -1;
-}
+        // Register type
+        if (wrapper->type_support.register_type(participant) != RETCODE_OK) {
+            std::cerr << "Failed to register type" << std::endl;
+            delete wrapper;
+            return nullptr;
+        }
 
-DDSSubscriber_t* create_subscriber(DDSDomainParticipant_t* participant_ptr, const char* topic_name) {
-    DomainParticipant* participant = static_cast<DomainParticipant*>(participant_ptr);
-    
-    DDSSubscriberWrapper* wrapper = new DDSSubscriberWrapper();
-    wrapper->participant = participant;
-    wrapper->type_support = TypeSupport(new HelloWorldMsgTypeSupport());
-    
-    // Register type
-    wrapper->type_support.register_type(participant);
-    
-    // Create topic
-    wrapper->topic = participant->create_topic(topic_name, "HelloWorldMsg", TOPIC_QOS_DEFAULT);
-    
-    // Create subscriber
-    wrapper->subscriber = participant->create_subscriber(SUBSCRIBER_QOS_DEFAULT);
-    
-    // Create reader
-    wrapper->reader = wrapper->subscriber->create_datareader(wrapper->topic, DATAREADER_QOS_DEFAULT);
-    
-    return static_cast<DDSSubscriber_t*>(wrapper);
-}
+        // Create topic
+        wrapper->topic = participant->create_topic(
+            topic_name, wrapper->type_support.get_type_name(), TOPIC_QOS_DEFAULT);
+        if (!wrapper->topic) {
+            std::cerr << "Failed to create topic" << std::endl;
+            delete wrapper;
+            return nullptr;
+        }
 
-int receive_message(DDSSubscriber_t* subscriber_ptr, HelloWorldMsg* msg, int timeout_ms) {
-    DDSSubscriberWrapper* wrapper = static_cast<DDSSubscriberWrapper*>(subscriber_ptr);
-    
-    SampleInfo info;
-    HelloWorldMsgType dds_msg;
-    
-    if (wrapper->reader->read_next_sample(&dds_msg, &info) == ReturnCode_t::RETCODE_OK) {
-        strncpy(msg->content, dds_msg.content.c_str(), 255);
-        msg->content[255] = '\0';
-        msg->timestamp = dds_msg.timestamp;
-        return 0;
+        // Create publisher
+        wrapper->publisher = participant->create_publisher(PUBLISHER_QOS_DEFAULT);
+        if (!wrapper->publisher) {
+            std::cerr << "Failed to create publisher" << std::endl;
+            delete wrapper;
+            return nullptr;
+        }
+
+        // Create writer
+        wrapper->writer = wrapper->publisher->create_datawriter(wrapper->topic, DATAWRITER_QOS_DEFAULT);
+        if (!wrapper->writer) {
+            std::cerr << "Failed to create writer" << std::endl;
+            delete wrapper;
+            return nullptr;
+        }
+
+        return wrapper;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in create_simple_publisher: " << e.what() << std::endl;
+        return nullptr;
     }
-    
-    return -1; // No data available
 }
 
-void destroy_publisher(DDSPublisher_t* publisher_ptr) {
-    DDSPublisherWrapper* wrapper = static_cast<DDSPublisherWrapper*>(publisher_ptr);
+int publish_simple_message(SimpleDDSPublisher pub, const char* message, long timestamp) {
+    SimplePublisherWrapper* wrapper = static_cast<SimplePublisherWrapper*>(pub);
+    if (!wrapper || !wrapper->writer) {
+        return -1;
+    }
+
+    try {
+        SimpleMessageData msg_data(std::string(message), timestamp);
+        return wrapper->writer->write(&msg_data) == RETCODE_OK ? 0 : -1;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in publish_simple_message: " << e.what() << std::endl;
+        return -1;
+    }
+}
+
+void destroy_simple_publisher(SimpleDDSPublisher pub) {
+    SimplePublisherWrapper* wrapper = static_cast<SimplePublisherWrapper*>(pub);
     if (wrapper) {
         if (wrapper->writer) wrapper->publisher->delete_datawriter(wrapper->writer);
         if (wrapper->topic) wrapper->participant->delete_topic(wrapper->topic);
         if (wrapper->publisher) wrapper->participant->delete_publisher(wrapper->publisher);
+        if (wrapper->participant) DomainParticipantFactory::get_instance()->delete_participant(wrapper->participant);
         delete wrapper;
     }
 }
 
-void destroy_subscriber(DDSSubscriber_t* subscriber_ptr) {
-    DDSSubscriberWrapper* wrapper = static_cast<DDSSubscriberWrapper*>(subscriber_ptr);
+SimpleDDSSubscriber create_simple_subscriber(const char* topic_name) {
+    try {
+        // Create participant
+        DomainParticipant* participant = DomainParticipantFactory::get_instance()->create_participant(
+            0, PARTICIPANT_QOS_DEFAULT);
+        if (!participant) {
+            std::cerr << "Failed to create participant" << std::endl;
+            return nullptr;
+        }
+
+        // Create wrapper
+        SimpleSubscriberWrapper* wrapper = new SimpleSubscriberWrapper();
+        wrapper->participant = participant;
+        wrapper->type_support = TypeSupport(new SimpleMessageTypeSupport());
+
+        // Register type
+        if (wrapper->type_support.register_type(participant) != RETCODE_OK) {
+            std::cerr << "Failed to register type" << std::endl;
+            delete wrapper;
+            return nullptr;
+        }
+
+        // Create topic
+        wrapper->topic = participant->create_topic(
+            topic_name, wrapper->type_support.get_type_name(), TOPIC_QOS_DEFAULT);
+        if (!wrapper->topic) {
+            std::cerr << "Failed to create topic" << std::endl;
+            delete wrapper;
+            return nullptr;
+        }
+
+        // Create subscriber
+        wrapper->subscriber = participant->create_subscriber(SUBSCRIBER_QOS_DEFAULT);
+        if (!wrapper->subscriber) {
+            std::cerr << "Failed to create subscriber" << std::endl;
+            delete wrapper;
+            return nullptr;
+        }
+
+        // Create reader
+        wrapper->reader = wrapper->subscriber->create_datareader(wrapper->topic, DATAREADER_QOS_DEFAULT);
+        if (!wrapper->reader) {
+            std::cerr << "Failed to create reader" << std::endl;
+            delete wrapper;
+            return nullptr;
+        }
+
+        return wrapper;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in create_simple_subscriber: " << e.what() << std::endl;
+        return nullptr;
+    }
+}
+
+int receive_simple_message(SimpleDDSSubscriber sub, SimpleMessage* msg) {
+    SimpleSubscriberWrapper* wrapper = static_cast<SimpleSubscriberWrapper*>(sub);
+    if (!wrapper || !wrapper->reader) {
+        return -1;
+    }
+
+    try {
+        SampleInfo info;
+        SimpleMessageData msg_data;
+        
+        if (wrapper->reader->read_next_sample(&msg_data, &info) == RETCODE_OK) {
+            strncpy(msg->message, msg_data.message.c_str(), 255);
+            msg->message[255] = '\0';
+            msg->timestamp = msg_data.timestamp;
+            return 0;
+        }
+        return -1; // No data available
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in receive_simple_message: " << e.what() << std::endl;
+        return -1;
+    }
+}
+
+void destroy_simple_subscriber(SimpleDDSSubscriber sub) {
+    SimpleSubscriberWrapper* wrapper = static_cast<SimpleSubscriberWrapper*>(sub);
     if (wrapper) {
         if (wrapper->reader) wrapper->subscriber->delete_datareader(wrapper->reader);
         if (wrapper->topic) wrapper->participant->delete_topic(wrapper->topic);
         if (wrapper->subscriber) wrapper->participant->delete_subscriber(wrapper->subscriber);
+        if (wrapper->participant) DomainParticipantFactory::get_instance()->delete_participant(wrapper->participant);
         delete wrapper;
-    }
-}
-
-void destroy_participant(DDSDomainParticipant_t* participant_ptr) {
-    DomainParticipant* participant = static_cast<DomainParticipant*>(participant_ptr);
-    if (participant) {
-        DomainParticipantFactory::get_instance()->delete_participant(participant);
     }
 }
 

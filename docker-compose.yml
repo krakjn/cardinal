@@ -1,0 +1,80 @@
+services:
+  cardinal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cardinal:latest
+    container_name: cardinal-app
+    
+    # Interactive terminal for TUI
+    stdin_open: true
+    tty: true
+    
+    # Network configuration for DDS communication
+    network_mode: host
+    
+    # Environment variables
+    environment:
+      - FASTDDS_DEFAULT_PROFILES_FILE=/app/fastdds_profiles.xml
+      - ROS_DOMAIN_ID=0
+      - FASTDDS_BUILTIN_TRANSPORTS=UDPv4
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "cardinal"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # OPTIONAL: Discovery Server (NOT a broker!)
+  # Only needed for complex networks (firewalls, VPNs, etc.)
+  # DDS works perfectly without this - it's truly brokerless!
+  # Enable with: docker-compose --profile discovery up
+  discovery-server:
+    image: cardinal:latest
+    container_name: cardinal-discovery-helper
+    command: ["fastdds", "discovery", "-i", "0", "-l", "127.0.0.1", "-p", "11811"]
+    ports:
+      - "11811:11811/tcp"
+      - "11811:11811/udp"
+    network_mode: host
+    restart: unless-stopped
+    profiles:
+      - discovery  # Disabled by default - only for complex networks
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  fastdds_data:
+    driver: local 

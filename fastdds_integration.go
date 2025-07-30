@@ -1,10 +1,5 @@
 package main
 
-/*
-#cgo CPPFLAGS: -I.
-#cgo LDFLAGS: -L. -lfastrtps -lfastcdr -lstdc++
-#include "fastdds.h"
-*/
 import "C"
 import (
 	"fmt"
@@ -12,56 +7,44 @@ import (
 	"unsafe"
 )
 
-// RealDDSPublisher wraps the C++ Fast DDS publisher
+// RealDDSPublisher wraps the simplified Fast DDS publisher
 type RealDDSPublisher struct {
-	participant C.DDSDomainParticipant_t
-	publisher   C.DDSPublisher_t
-	topic       string
+	publisher C.SimpleDDSPublisher
+	topic     string
 }
 
-// RealDDSSubscriber wraps the C++ Fast DDS subscriber
+// RealDDSSubscriber wraps the simplified Fast DDS subscriber
 type RealDDSSubscriber struct {
-	participant C.DDSDomainParticipant_t
-	subscriber  C.DDSSubscriber_t
-	topic       string
+	subscriber C.SimpleDDSSubscriber
+	topic      string
 }
 
 // NewRealDDSSystem creates a real Fast DDS publisher and subscriber
 func NewRealDDSSystem(domainID int, topic string) (*RealDDSPublisher, *RealDDSSubscriber, error) {
-	// Create participant
-	participant := C.create_participant(C.int(domainID))
-	if participant == nil {
-		return nil, nil, fmt.Errorf("failed to create DDS participant")
-	}
-
 	// Create publisher
 	topicCStr := C.CString(topic)
 	defer C.free(unsafe.Pointer(topicCStr))
-	
-	publisher := C.create_publisher(participant, topicCStr)
+
+	publisher := C.create_simple_publisher(topicCStr)
 	if publisher == nil {
-		C.destroy_participant(participant)
 		return nil, nil, fmt.Errorf("failed to create DDS publisher")
 	}
 
 	// Create subscriber
-	subscriber := C.create_subscriber(participant, topicCStr)
+	subscriber := C.create_simple_subscriber(topicCStr)
 	if subscriber == nil {
-		C.destroy_publisher(publisher)
-		C.destroy_participant(participant)
+		C.destroy_simple_publisher(publisher)
 		return nil, nil, fmt.Errorf("failed to create DDS subscriber")
 	}
 
 	pub := &RealDDSPublisher{
-		participant: participant,
-		publisher:   publisher,
-		topic:       topic,
+		publisher: publisher,
+		topic:     topic,
 	}
 
 	sub := &RealDDSSubscriber{
-		participant: participant,
-		subscriber:  subscriber,
-		topic:       topic,
+		subscriber: subscriber,
+		topic:      topic,
 	}
 
 	return pub, sub, nil
@@ -71,59 +54,53 @@ func NewRealDDSSystem(domainID int, topic string) (*RealDDSPublisher, *RealDDSSu
 func (p *RealDDSPublisher) Publish(msg DDSMessage) error {
 	contentCStr := C.CString(msg.Content)
 	defer C.free(unsafe.Pointer(contentCStr))
-	
+
 	timestamp := C.long(msg.Timestamp.Unix())
-	
-	result := C.publish_message(p.publisher, contentCStr, timestamp)
+
+	result := C.publish_simple_message(p.publisher, contentCStr, timestamp)
 	if result != 0 {
 		return fmt.Errorf("failed to publish message")
 	}
-	
+
 	return nil
 }
 
 // Subscribe receives messages from Fast DDS
 func (s *RealDDSSubscriber) Subscribe() <-chan DDSMessage {
 	msgChan := make(chan DDSMessage, 100)
-	
+
 	go func() {
 		defer close(msgChan)
-		
+
 		for {
-			var cMsg C.HelloWorldMsg
-			result := C.receive_message(s.subscriber, &cMsg, C.int(100)) // 100ms timeout
-			
+			var cMsg C.SimpleMessage
+			result := C.receive_simple_message(s.subscriber, &cMsg)
+
 			if result == 0 {
 				msg := DDSMessage{
-					Content:   C.GoString(&cMsg.content[0]),
+					Content:   C.GoString(&cMsg.message[0]),
 					Timestamp: time.Unix(int64(cMsg.timestamp), 0),
 				}
 				msgChan <- msg
 			}
-			
+
 			// Small sleep to prevent busy waiting
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	
+
 	return msgChan
 }
 
 // Cleanup cleans up Fast DDS resources
 func (p *RealDDSPublisher) Cleanup() {
 	if p.publisher != nil {
-		C.destroy_publisher(p.publisher)
+		C.destroy_simple_publisher(p.publisher)
 	}
 }
 
 func (s *RealDDSSubscriber) Cleanup() {
 	if s.subscriber != nil {
-		C.destroy_subscriber(s.subscriber)
+		C.destroy_simple_subscriber(s.subscriber)
 	}
 }
-
-func CleanupParticipant(participant C.DDSDomainParticipant_t) {
-	if participant != nil {
-		C.destroy_participant(participant)
-	}
-} 
