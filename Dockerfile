@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up Go environment
-RUN curl -L https://go.dev/dl/go1.24.5.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+RUN curl -L https://go.dev/dl/go1.24.5.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV GOROOT="/usr/local/go"
 ENV GOPATH="/go"
@@ -62,68 +62,11 @@ cmake -S Fast-DDS -B Fast-DDS/build \
     -DSECURITY=ON -DCOMPILE_EXAMPLES=OFF -DBUILD_TESTING=OFF
 cmake --build Fast-DDS/build --target install
 
+# Update library cache
+ldconfig
 EOF
 
-# Update library cache
-RUN ldconfig
+# install just command runner
+RUN curl -LsSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
 
-# Set up CGO environment for Fast DDS
-ENV CGO_ENABLED=1
-ENV CGO_CPPFLAGS="-I/usr/local/include"
-ENV CGO_LDFLAGS="-L/usr/local/lib -lfastrtps -lfastcdr -lstdc++"
-
-# Create development user
-RUN useradd -m -s /bin/bash -u 1000 developer && \
-    usermod -aG sudo developer && \
-    echo "developer ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-
-# Create workspace directory
-RUN mkdir -p /workspace && \
-    chown -R developer:developer /workspace
-
-# Switch to development user
-USER developer
-
-# Set workspace as working directory
-WORKDIR /workspace
-
-# Create welcome script
-RUN echo '#!/bin/bash\n\
-echo "🚀 Fast DDS Development Environment (Streamlined)"\n\
-echo "==============================================="\n\
-echo "Go Version: $(go version)"\n\
-echo "Fast DDS: Installed to /usr/local"\n\
-echo "CGO: Enabled and configured"\n\
-echo ""\n\
-echo "📁 Workspace: /workspace (mount your code here)"\n\
-echo "🔧 Ready for: go build, CGO compilation"\n\
-echo ""\n\
-echo "Quick start:"\n\
-echo "  go mod tidy"\n\
-echo "  go build -o myapp *.go"\n\
-echo "  ./myapp"\n\
-echo ""\n\
-echo "🎯 Ready for development!"\n\
-' > /home/developer/.welcome.sh && \
-    chmod +x /home/developer/.welcome.sh
-
-# Add welcome message to bashrc
-RUN echo 'bash /home/developer/.welcome.sh' >> /home/developer/.bashrc
-
-# Expose DDS ports
-EXPOSE 7400-7500/udp
-EXPOSE 7400-7500/tcp
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD [ -f /usr/local/lib/libfastrtps.so ] || exit 1
-
-# Default command - interactive shell for development
 CMD ["/bin/bash"]
-
-# Labels for documentation
-LABEL maintainer="Fast DDS Development Team"
-LABEL description="Streamlined Fast DDS development environment for Go applications"
-LABEL version="2.0"
-LABEL fast-dds-version="latest"
-LABEL purpose="development-environment"

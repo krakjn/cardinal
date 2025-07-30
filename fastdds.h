@@ -29,4 +29,4 @@ void destroy_simple_subscriber(SimpleDDSSubscriber sub);
 }
 #endif
 
-#endif // FASTDDS_SIMPLE_H 
+#endif // FASTDDS_SIMPLE_H

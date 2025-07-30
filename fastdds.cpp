@@ -8,11 +8,14 @@
 #include <fastdds/dds/topic/Topic.hpp>
 #include <fastdds/dds/topic/TypeSupport.hpp>
 #include <fastdds/dds/subscriber/SampleInfo.hpp>
+#include <fastdds/rtps/common/SerializedPayload.hpp>
 #include <string>
 #include <iostream>
 #include <memory>
+#include <cstring>
 
 using namespace eprosima::fastdds::dds;
+using namespace eprosima::fastdds::rtps;
 
 // Simple message class for Fast DDS
 class SimpleMessageData {
@@ -24,7 +27,7 @@ public:
     SimpleMessageData(const std::string& msg, int64_t ts) : message(msg), timestamp(ts) {}
 };
 
-// Simplified TypeSupport for demo purposes
+// Simplified TypeSupport for Fast DDS
 class SimpleMessageTypeSupport : public TopicDataType {
 public:
     SimpleMessageTypeSupport() {
@@ -292,4 +295,4 @@ void destroy_simple_subscriber(SimpleDDSSubscriber sub) {
     }
 }
 
-} 
+}

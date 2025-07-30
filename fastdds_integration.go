@@ -1,5 +1,12 @@
 package main
 
+/*
+#cgo CFLAGS:
+#cgo CPPFLAGS: -I/usr/local/include
+#cgo LDFLAGS: -L/usr/local/lib -lfastdds -lfastcdr -lstdc++ -Lbuild -lfastdds_wrapper
+#include "fastdds.h"
+#include <stdlib.h>
+*/
 import "C"
 import (
 	"fmt"

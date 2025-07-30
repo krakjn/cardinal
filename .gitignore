@@ -1,0 +1,5 @@
+# Go cache for faster builds
+.cache/
+
+# Build artifacts
+build/

@@ -175,13 +175,15 @@ func tuiSubscriber(ctx context.Context, sub DDSSubscriber, program *tea.Program,
 }
 
 func main() {
-	// Try real DDS first, fallback to mock
+	fmt.Println("🚀 Starting Cardinal - Lipgloss + DDS Demo")
+
+	// Try real Fast DDS first, fallback to mock
 	realPub, realSub, err := NewRealDDSSystem(0, "hello_topic")
 	if err != nil {
 		// Fallback to mock DDS
-		fmt.Println("⚠️ Real DDS failed, using mock DDS:", err)
-		mockPub, mockSub := NewDDSSystem()
-		runApplication(mockPub, mockSub)
+		fmt.Println("⚠️  Real DDS failed, using mock DDS:", err)
+		pub, sub := NewDDSSystem()
+		runApplication(pub, sub)
 	} else {
 		fmt.Println("✅ Using real Fast DDS!")
 
