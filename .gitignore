@@ -1,5 +1,13 @@
-# Go cache for faster builds
+# cache for faster builds
 .cache/
 
 # Build artifacts
-build/
+**/build/
+
+# Zig build artifacts
+zig/zig-out/
+zig/.zig-cache/
+zig/.cache/
+
+# Rust build artifacts
+rust/target/

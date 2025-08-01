@@ -2,9 +2,11 @@ package main
 
 /*
 #cgo CFLAGS:
-#cgo CPPFLAGS: -I/usr/local/include
-#cgo LDFLAGS: -L/usr/local/lib -lfastdds -lfastcdr -lstdc++ -Lbuild -lfastdds_wrapper
+#cgo CPPFLAGS: -I/usr/local/include -I/workspace/lib
+#cgo CXXFLAGS: -std=c++17
+#cgo LDFLAGS: -L/usr/local/lib -L/workspace/build -lcardinal-fastdds -lfastdds -lfastcdr -lstdc++
 #include "fastdds.h"
+
 #include <stdlib.h>
 */
 import "C"

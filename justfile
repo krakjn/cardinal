@@ -1,44 +1,81 @@
 #!/usr/bin/env just --justfile
-
 _:
   just --list
+
 
 image:
     docker build -t cardinal - < Dockerfile
 
-# Build with real Fast DDS
-build:
-    mkdir -p .cache
-    docker run --rm \
-        -v $(pwd):/workspace \
-        -v $(pwd)/.cache:/go/pkg \
-        -w /workspace \
-        cardinal \
-        just _compile
+_mkdirs:
+    @mkdir -p .cache/{go,zig,rust}
 
-_compile:
-    #!/bin/bash
-    set -e
+DOCKER_RUN := "docker run --rm --tty -v $(pwd):/workspace -v $(pwd)/.cache/go:/root/.cache/go -v $(pwd)/.cache/zig:/root/.cache/zig -v $(pwd)/.cache/rust:/root/.cargo/registry -w /workspace cardinal"
+
+build ARG='all': _mkdirs
+    #!/usr/bin/env bash
+    if [ "{{ ARG }}" = "all" ]; then
+        {{ DOCKER_RUN }} just _lib _go _zig _rust
+    else
+        {{ DOCKER_RUN }} just _{{ ARG }}
+    fi
+
+_lib:
     mkdir -p build
-    g++ -I/usr/local/include -std=c++17 -fPIC -c fastdds.cpp -o build/fastdds.o
-    ar rcs build/libfastdds_wrapper.a build/fastdds.o
-    CGO_CFLAGS="" go build -o build/cardinal .
+    g++ -I/usr/local/include -std=c++17 -fPIC -c lib/fastdds.cpp -o build/fastdds.o
+    ar rcs build/libcardinal-fastdds.a build/fastdds.o
 
-# Run the application
-run *ARGS:
+_go:
+    #!/usr/bin/env bash
+    cd go
+    mkdir -p build
+    CGO_CFLAGS="" CGO_CXXFLAGS="-std=c++17" go build -o build/cardinal .
+
+_go-run:
+    ./go/build/cardinal
+
+_zig:
+    cd zig && zig build --cache-dir .cache/zig
+
+_zig-run:
+    #!/usr/bin/env bash
+    ./zig/zig-out/bin/cardinal
+
+_rust:
+    #!/usr/bin/env bash
+    . /root/.cargo/env
+    cd rust 
+    cargo build --release
+
+_rust-run:
+    #!/usr/bin/env bash
+    cd rust
+    cargo run
+
+run ARG:
     docker run --rm -it \
         -v $(pwd):/workspace \
-        -v $(pwd)/.cache:/go/pkg \
+        -v $(pwd)/.cache/go:/root/.cache/go \
+        -v $(pwd)/.cache/zig:/root/.cache/zig \
+        -v $(pwd)/.cache/rust:/root/.cargo/registry \
         -w /workspace \
         cardinal \
-        {{ if ARGS == "" { "./build/cardinal" } else { ARGS } }}
+        just _{{ ARG }}-run
 
 shell:
-    docker-compose run --rm cardinal bash
+    docker run --rm -it \
+        -v $(pwd):/workspace \
+        -v $(pwd)/.cache/go:/root/.cache/go \
+        -v $(pwd)/.cache/zig:/root/.cache/zig \
+        -v $(pwd)/.cache/rust:/root/.cargo/registry \
+        -w /workspace \
+        cardinal \
+        bash
 
-# Clean up build artifacts
 clean:
     rm -rf build/
+    rm -rf go/build/
+    rm -rf zig/zig-out/
+    rm -rf rust/target/
 
 # Clean up docker resources
 clean-docker:

@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     valgrind \
     vim \
     wget \
+    xz-utils \
     # Fast DDS dependencies
     libasio-dev \
     libtinyxml2-dev \
@@ -32,14 +33,6 @@ RUN apt-get update && apt-get install -y \
     # XML validation
     libxml2-utils \
     && rm -rf /var/lib/apt/lists/*
-
-# Set up Go environment
-RUN curl -L https://go.dev/dl/go1.24.5.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xzf -
-ENV PATH="/usr/local/go/bin:${PATH}"
-ENV GOROOT="/usr/local/go"
-ENV GOPATH="/go"
-
-RUN python3 -m pip install -U colcon-common-extensions vcstool
 
 # Build and install Fast DDS stack
 RUN <<EOF
@@ -68,5 +61,19 @@ EOF
 
 # install just command runner
 RUN curl -LsSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+# Set up Go environment
+RUN curl -L https://go.dev/dl/go1.24.5.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOROOT="/usr/local/go"
+ENV GOPATH="/go"
+
+# Install Zig
+RUN curl -L https://ziglang.org/download/0.14.1/zig-$(uname -m)-linux-0.14.1.tar.xz | tar -C /usr/local -xJf - && \
+    ln -s /usr/local/zig-$(uname -m)-linux-*/zig /usr/local/bin/zig
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 CMD ["/bin/bash"]
