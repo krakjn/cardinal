@@ -32,6 +32,8 @@ RUN apt-get update && apt-get install -y \
     libgtest-dev \
     # XML validation
     libxml2-utils \
+    # Debug tools for Zig
+    binutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install Fast DDS stack
@@ -69,8 +71,9 @@ ENV GOROOT="/usr/local/go"
 ENV GOPATH="/go"
 
 # Install Zig
-RUN curl -L https://ziglang.org/download/0.14.1/zig-$(uname -m)-linux-0.14.1.tar.xz | tar -C /usr/local -xJf - && \
-    ln -s /usr/local/zig-$(uname -m)-linux-*/zig /usr/local/bin/zig
+RUN curl -L https://ziglang.org/download/0.14.1/zig-$(uname -m)-linux-0.14.1.tar.xz | tar -xJf - && \
+  mv zig-$(uname -m)-linux-0.14.1/ /usr/local/zig
+ENV PATH="/usr/local/zig:${PATH}"
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

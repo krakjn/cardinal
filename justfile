@@ -48,8 +48,7 @@ _rust:
 
 _rust-run:
     #!/usr/bin/env bash
-    cd rust
-    cargo run
+    ./rust/target/release/cardinal
 
 run ARG:
     docker run --rm -it \
@@ -72,9 +71,10 @@ shell:
         bash
 
 clean:
+    rm -rf .cache/
     rm -rf build/
     rm -rf go/build/
-    rm -rf zig/zig-out/
+    rm -rf zig/{zig-out,.cache,.zig-cache}
     rm -rf rust/target/
 
 # Clean up docker resources

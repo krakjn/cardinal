@@ -2,26 +2,28 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
+
+    // Add libvaxis dependency
+    const vaxis_dep = b.dependency("vaxis", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     // Main executable
     const exe = b.addExecutable(.{
         .name = "cardinal",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .ReleaseFast,
+        .strip = true,
     });
 
-    // Link the pre-built FastDDS wrapper library
-    exe.addLibraryPath(.{ .cwd_relative = "../build" });
-    exe.linkSystemLibrary("cardinal-fastdds");
-    exe.addIncludePath(.{ .cwd_relative = "../lib" });
-    exe.addIncludePath(.{ .cwd_relative = "/usr/local/include" });
-    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/gcc/aarch64-linux-gnu/11" });
+    // Add vaxis module
+    exe.root_module.addImport("vaxis", vaxis_dep.module("vaxis"));
+
+    // Link system libraries
     exe.linkSystemLibrary("stdc++");
-    exe.linkSystemLibrary("fastdds");
-    exe.linkSystemLibrary("fastcdr");
-    exe.addObjectFile(.{ .cwd_relative = "/usr/lib/gcc/aarch64-linux-gnu/11/libstdc++.a" });
 
     // Add to build outputs
     b.installArtifact(exe);
