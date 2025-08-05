@@ -3,10 +3,76 @@ const fmt = std.fmt;
 const heap = std.heap;
 const mem = std.mem;
 const vaxis = @import("vaxis");
+const fastdds = @import("fastdds.zig");
 
 const Event = union(enum) {
     key_press: vaxis.Key,
     winsize: vaxis.Winsize,
+};
+
+// DDS Message Display Structure
+const DDSMessageDisplay = struct {
+    id: u32,
+    content: []const u8,
+    timestamp: i64,
+    formatted_time: []const u8,
+    status: []const u8,
+
+    pub fn fromDDSMessage(alloc: std.mem.Allocator, msg: fastdds.DDSMessage, id: u32) !DDSMessageDisplay {
+        const formatted_time = try fmt.allocPrint(alloc, "{d}", .{@mod(msg.timestamp, 86400)}); // Show time of day
+        const status = if (id % 3 == 0) "✓ Processed" else if (id % 3 == 1) "⏳ Processing" else "📥 Received";
+
+        return DDSMessageDisplay{
+            .id = id,
+            .content = try alloc.dupe(u8, msg.content),
+            .timestamp = msg.timestamp,
+            .formatted_time = formatted_time,
+            .status = status,
+        };
+    }
+
+    pub fn deinit(self: *DDSMessageDisplay, alloc: std.mem.Allocator) void {
+        alloc.free(self.content);
+        alloc.free(self.formatted_time);
+    }
+};
+
+// Progress Bar Component
+const ProgressBar = struct {
+    current: f32,
+    max: f32,
+    width: u16,
+
+    pub fn init(width: u16) ProgressBar {
+        return ProgressBar{
+            .current = 0.0,
+            .max = 100.0,
+            .width = width,
+        };
+    }
+
+    pub fn setProgress(self: *ProgressBar, current: f32, max: f32) void {
+        self.current = current;
+        self.max = max;
+    }
+
+    pub fn render(self: *ProgressBar, alloc: std.mem.Allocator) ![]const u8 {
+        const percentage = if (self.max > 0) (self.current / self.max) else 0.0;
+        const filled_width = @as(u16, @intFromFloat(@as(f32, @floatFromInt(self.width)) * percentage));
+        const empty_width = self.width - filled_width;
+
+        var progress_str = std.ArrayList(u8).init(alloc);
+        defer progress_str.deinit();
+
+        for (0..filled_width) |_| {
+            try progress_str.appendSlice("█");
+        }
+        for (0..empty_width) |_| {
+            try progress_str.appendSlice("░");
+        }
+
+        return try progress_str.toOwnedSlice();
+    }
 };
 
 pub const panic = vaxis.panic_handler;
@@ -16,12 +82,37 @@ pub fn main() !void {
     defer if (gpa.detectLeaks()) std.log.err("Memory leak detected!", .{});
     const alloc = gpa.allocator();
 
-    // Initialize users data
+    // Initialize DDS system (using mock for demonstration)
+    var mock_dds = fastdds.MockDDSSystem.init(alloc);
+    defer mock_dds.deinit();
+    var mock_subscriber = mock_dds.createSubscriber();
+    var mock_publisher = mock_dds.createPublisher();
+
+    // Initialize DDS message storage
+    var dds_messages = std.ArrayList(DDSMessageDisplay).init(alloc);
+    defer {
+        for (dds_messages.items) |*msg| {
+            msg.deinit(alloc);
+        }
+        dds_messages.deinit();
+    }
+
+    // Message ID counter
+    var message_id_counter: u32 = 0;
+
+    // Initialize progress bar
+    var progress_bar = ProgressBar.init(50);
+
+    // Initialize users data (keep for comparison)
     const users_buf = try alloc.dupe(User, users[0..]);
     defer alloc.free(users_buf);
     var user_mal = std.MultiArrayList(User){};
     for (users_buf[0..]) |user| try user_mal.append(alloc, user);
     defer user_mal.deinit(alloc);
+
+    // Create DDS message MultiArrayList for table display
+    var dds_mal = std.MultiArrayList(DDSMessageDisplay){};
+    defer dds_mal.deinit(alloc);
 
     var tty = try vaxis.Tty.init();
     defer tty.deinit();
@@ -52,7 +143,22 @@ pub fn main() !void {
     const medium_bg: vaxis.Cell.Color = .{ .rgb = .{ 32, 32, 48 } };
     const detail_bg: vaxis.Cell.Color = .{ .rgb = .{ 24, 24, 36 } };
 
-    // Table Context
+    // Table Context for DDS Messages
+    var dds_tbl: vaxis.widgets.Table.TableContext = .{
+        .active_bg = primary_blue,
+        .active_fg = .{ .rgb = .{ 0, 0, 0 } },
+        .row_bg_1 = dark_bg,
+        .row_bg_2 = darker_bg,
+        .selected_bg = accent_cyan,
+        .header_names = .{ .custom = &.{ "ID", "Content", "Time", "Status" } },
+        .col_indexes = .{ .by_idx = &.{ 0, 1, 2, 3 } },
+        .col_width = .{ .static_individual = &.{ 8, 35, 12, 15 } },
+        .header_borders = true,
+        .col_borders = true,
+    };
+    defer if (dds_tbl.sel_rows) |rows| alloc.free(rows);
+
+    // Table Context for Users (backup)
     var demo_tbl: vaxis.widgets.Table.TableContext = .{
         .active_bg = primary_blue,
         .active_fg = .{ .rgb = .{ 0, 0, 0 } },
@@ -69,10 +175,15 @@ pub fn main() !void {
 
     // State
     var selected_user_idx: usize = 0;
+    var selected_message_idx: usize = 0;
     var show_help = false;
     var animation_frame: u32 = 0;
     var current_tab: usize = 0;
-    const tab_names = [_][]const u8{ "👥 Users", "📊 Analytics", "⚙️ Settings", "📈 Reports" };
+    const tab_names = [_][]const u8{ "📡 DDS Messages", "👥 Users", "📊 Analytics", "⚙️ Settings" };
+
+    // Mock message generation
+    var last_message_time: u64 = 0;
+    const message_interval: u64 = 1000; // Generate message every 1000ms
 
     // Create an Arena Allocator for easy allocations on each Event.
     var event_arena = heap.ArenaAllocator.init(alloc);
@@ -85,6 +196,50 @@ pub fn main() !void {
 
         // Animation frame counter
         animation_frame += 1;
+
+        // Generate mock DDS messages periodically
+        const current_time: u64 = @intCast(std.time.milliTimestamp());
+        if (current_time - last_message_time > message_interval) {
+            last_message_time = current_time;
+
+            // Create mock messages
+            const mock_messages = [_][]const u8{
+                "Sensor temperature: 23.5°C",
+                "GPS coordinates: 40.7128, -74.0060",
+                "System status: All systems operational",
+                "Battery level: 85%",
+                "Network connectivity: Strong",
+                "Memory usage: 45%",
+                "CPU load: 12%",
+                "Disk space: 78% used",
+                "Active connections: 42",
+                "Data throughput: 1.2 MB/s",
+            };
+
+            const content = mock_messages[animation_frame % mock_messages.len];
+            const mock_message = fastdds.DDSMessage.init(content, @intCast(current_time));
+
+            // Publish to mock system
+            try mock_publisher.publish(mock_message);
+
+            // Try to receive and add to our display list
+            if (mock_subscriber.receive()) |received_msg| {
+                const display_msg = try DDSMessageDisplay.fromDDSMessage(alloc, received_msg, message_id_counter);
+                try dds_messages.append(display_msg);
+                try dds_mal.append(alloc, display_msg);
+                message_id_counter += 1;
+
+                // Update progress bar (simulate processing progress)
+                progress_bar.setProgress(@floatFromInt(dds_messages.items.len % 20), 20.0);
+
+                // Keep only last 50 messages for display
+                if (dds_messages.items.len > 50) {
+                    var old_msg = dds_messages.orderedRemove(0);
+                    old_msg.deinit(alloc);
+                    _ = dds_mal.orderedRemove(0);
+                }
+            }
+        }
 
         // Poll for events with a small timeout to enable animation
         const event = loop.tryEvent() orelse {
@@ -121,56 +276,113 @@ pub fn main() !void {
                     animation_frame = 0; // Reset animation
                 }
 
-                // Navigation
+                // Navigation based on current tab
                 if (key.matchesAny(&.{ vaxis.Key.up, 'k' }, .{})) {
-                    demo_tbl.row -|= 1;
-                    selected_user_idx = demo_tbl.row;
+                    if (current_tab == 0) { // DDS Messages tab
+                        dds_tbl.row -|= 1;
+                        selected_message_idx = dds_tbl.row;
+                    } else if (current_tab == 1) { // Users tab
+                        demo_tbl.row -|= 1;
+                        selected_user_idx = demo_tbl.row;
+                    }
                 }
                 if (key.matchesAny(&.{ vaxis.Key.down, 'j' }, .{})) {
-                    demo_tbl.row = @min(demo_tbl.row + 1, users_buf.len - 1);
-                    selected_user_idx = demo_tbl.row;
+                    if (current_tab == 0) { // DDS Messages tab
+                        if (dds_messages.items.len > 0) {
+                            dds_tbl.row = @min(dds_tbl.row + 1, dds_messages.items.len - 1);
+                            selected_message_idx = dds_tbl.row;
+                        }
+                    } else if (current_tab == 1) { // Users tab
+                        demo_tbl.row = @min(demo_tbl.row + 1, users_buf.len - 1);
+                        selected_user_idx = demo_tbl.row;
+                    }
                 }
 
                 // Page navigation
                 if (key.matches(vaxis.Key.page_up, .{}) or key.matches('u', .{ .ctrl = true })) {
-                    demo_tbl.row = if (demo_tbl.row >= 10) demo_tbl.row - 10 else 0;
-                    selected_user_idx = demo_tbl.row;
+                    if (current_tab == 0) { // DDS Messages tab
+                        dds_tbl.row = if (dds_tbl.row >= 10) dds_tbl.row - 10 else 0;
+                        selected_message_idx = dds_tbl.row;
+                    } else if (current_tab == 1) { // Users tab
+                        demo_tbl.row = if (demo_tbl.row >= 10) demo_tbl.row - 10 else 0;
+                        selected_user_idx = demo_tbl.row;
+                    }
                 }
                 if (key.matches(vaxis.Key.page_down, .{}) or key.matches('d', .{ .ctrl = true })) {
-                    demo_tbl.row = @min(demo_tbl.row + 10, users_buf.len - 1);
-                    selected_user_idx = demo_tbl.row;
+                    if (current_tab == 0) { // DDS Messages tab
+                        if (dds_messages.items.len > 0) {
+                            dds_tbl.row = @min(dds_tbl.row + 10, dds_messages.items.len - 1);
+                            selected_message_idx = dds_tbl.row;
+                        }
+                    } else if (current_tab == 1) { // Users tab
+                        demo_tbl.row = @min(demo_tbl.row + 10, users_buf.len - 1);
+                        selected_user_idx = demo_tbl.row;
+                    }
                 }
 
                 // Go to top/bottom
                 if (key.matches('g', .{})) {
-                    demo_tbl.row = 0;
-                    selected_user_idx = 0;
+                    if (current_tab == 0) { // DDS Messages tab
+                        dds_tbl.row = 0;
+                        selected_message_idx = 0;
+                    } else if (current_tab == 1) { // Users tab
+                        demo_tbl.row = 0;
+                        selected_user_idx = 0;
+                    }
                 }
                 if (key.matches('G', .{})) {
-                    demo_tbl.row = @intCast(users_buf.len - 1);
-                    selected_user_idx = users_buf.len - 1;
+                    if (current_tab == 0) { // DDS Messages tab
+                        if (dds_messages.items.len > 0) {
+                            dds_tbl.row = @intCast(dds_messages.items.len - 1);
+                            selected_message_idx = dds_messages.items.len - 1;
+                        }
+                    } else if (current_tab == 1) { // Users tab
+                        demo_tbl.row = @intCast(users_buf.len - 1);
+                        selected_user_idx = users_buf.len - 1;
+                    }
                 }
 
                 // Select/Unselect Row
                 if (key.matches(vaxis.Key.space, .{})) {
-                    const rows = demo_tbl.sel_rows orelse createRows: {
-                        demo_tbl.sel_rows = try alloc.alloc(u16, 1);
-                        break :createRows demo_tbl.sel_rows.?;
-                    };
-                    var rows_list = std.ArrayList(u16).fromOwnedSlice(alloc, rows);
-                    for (rows_list.items, 0..) |row, idx| {
-                        if (row != demo_tbl.row) continue;
-                        _ = rows_list.orderedRemove(idx);
-                        break;
-                    } else try rows_list.append(demo_tbl.row);
-                    demo_tbl.sel_rows = try rows_list.toOwnedSlice();
+                    if (current_tab == 0) { // DDS Messages tab
+                        const rows = dds_tbl.sel_rows orelse createRows: {
+                            dds_tbl.sel_rows = try alloc.alloc(u16, 1);
+                            break :createRows dds_tbl.sel_rows.?;
+                        };
+                        var rows_list = std.ArrayList(u16).fromOwnedSlice(alloc, rows);
+                        for (rows_list.items, 0..) |row, idx| {
+                            if (row != dds_tbl.row) continue;
+                            _ = rows_list.orderedRemove(idx);
+                            break;
+                        } else try rows_list.append(dds_tbl.row);
+                        dds_tbl.sel_rows = try rows_list.toOwnedSlice();
+                    } else if (current_tab == 1) { // Users tab
+                        const rows = demo_tbl.sel_rows orelse createRows: {
+                            demo_tbl.sel_rows = try alloc.alloc(u16, 1);
+                            break :createRows demo_tbl.sel_rows.?;
+                        };
+                        var rows_list = std.ArrayList(u16).fromOwnedSlice(alloc, rows);
+                        for (rows_list.items, 0..) |row, idx| {
+                            if (row != demo_tbl.row) continue;
+                            _ = rows_list.orderedRemove(idx);
+                            break;
+                        } else try rows_list.append(demo_tbl.row);
+                        demo_tbl.sel_rows = try rows_list.toOwnedSlice();
+                    }
                 }
 
                 // Clear selections
                 if (key.matches('c', .{})) {
-                    if (demo_tbl.sel_rows) |rows| {
-                        alloc.free(rows);
-                        demo_tbl.sel_rows = null;
+                    if (current_tab == 0) { // DDS Messages tab
+                        if (dds_tbl.sel_rows) |rows| {
+                            alloc.free(rows);
+                            dds_tbl.sel_rows = null;
+                        }
+                    } else if (current_tab == 1) { // Users tab
+                        if (demo_tbl.sel_rows) |rows| {
+                            alloc.free(rows);
+                            demo_tbl.sel_rows = null;
+                        }
                     }
                 }
             },
@@ -213,10 +425,10 @@ pub fn main() !void {
 
         // Render tab content
         switch (current_tab) {
-            0 => try renderUsersTab(event_alloc, &main_content, &demo_tbl, user_mal, users_buf, selected_user_idx, animation_frame, split_width, content_height, accent_cyan, warning_yellow, detail_bg, success_green, primary_blue),
-            1 => try renderAnalyticsTab(event_alloc, &main_content, users_buf, animation_frame, primary_blue, success_green, warning_yellow, danger_red),
-            2 => try renderSettingsTab(event_alloc, &main_content, animation_frame, medium_bg, accent_cyan, success_green),
-            3 => try renderReportsTab(event_alloc, &main_content, users_buf, animation_frame, primary_blue, warning_yellow, success_green),
+            0 => try renderDDSMessagesTab(event_alloc, &main_content, &dds_tbl, dds_mal, dds_messages.items, selected_message_idx, animation_frame, split_width, content_height, accent_cyan, warning_yellow, detail_bg, success_green, primary_blue, &progress_bar),
+            1 => try renderUsersTab(event_alloc, &main_content, &demo_tbl, user_mal, users_buf, selected_user_idx, animation_frame, split_width, content_height, accent_cyan, warning_yellow, detail_bg, success_green, primary_blue),
+            2 => try renderAnalyticsTab(event_alloc, &main_content, dds_messages.items, animation_frame, primary_blue, success_green, warning_yellow, danger_red),
+            3 => try renderSettingsTab(event_alloc, &main_content, animation_frame, medium_bg, accent_cyan, success_green),
             else => {},
         }
 
@@ -240,7 +452,13 @@ pub fn main() !void {
             };
             _ = controls.print(&help_segments, .{ .wrap = .word });
         } else {
-            const status_text = try fmt.allocPrint(event_alloc, "┃ {s} │ Row: {d}/{d} │ Selected: {d} │ Tab: {d}/4 │ Help: h │ Exit: Ctrl+C", .{ tab_names[current_tab], demo_tbl.row + 1, users_buf.len, if (demo_tbl.sel_rows != null) demo_tbl.sel_rows.?.len else 0, current_tab + 1 });
+            const RowInfo = struct { row: usize, total: usize, selected: usize };
+            const row_info: RowInfo = if (current_tab == 0)
+                .{ .row = dds_tbl.row + 1, .total = dds_messages.items.len, .selected = if (dds_tbl.sel_rows != null) dds_tbl.sel_rows.?.len else 0 }
+            else
+                .{ .row = demo_tbl.row + 1, .total = users_buf.len, .selected = if (demo_tbl.sel_rows != null) demo_tbl.sel_rows.?.len else 0 };
+
+            const status_text = try fmt.allocPrint(event_alloc, "┃ {s} │ Row: {d}/{d} │ Selected: {d} │ Tab: {d}/4 │ Help: h │ Exit: Ctrl+C", .{ tab_names[current_tab], row_info.row, row_info.total, row_info.selected, current_tab + 1 });
             const status_segments = [_]vaxis.Cell.Segment{
                 .{ .text = status_text, .style = .{ .bg = medium_bg, .fg = .{ .rgb = .{ 200, 200, 200 } } } },
                 .{ .text = " ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", .style = .{ .bg = medium_bg, .fg = primary_blue } },
@@ -301,6 +519,109 @@ fn renderTabBar(alloc: std.mem.Allocator, win: *vaxis.Window, current_tab: usize
         .{ .text = border_text, .style = .{ .fg = primary_blue } },
     };
     _ = border_win.print(&border_segments, .{});
+}
+
+// DDS Messages Tab - Shows live DDS messages with progress bar
+fn renderDDSMessagesTab(alloc: std.mem.Allocator, win: *vaxis.Window, dds_tbl: *vaxis.widgets.Table.TableContext, dds_mal: std.MultiArrayList(DDSMessageDisplay), dds_messages: []const DDSMessageDisplay, selected_message_idx: usize, animation_frame: u32, split_width: u16, content_height: u16, accent_cyan: vaxis.Cell.Color, warning_yellow: vaxis.Cell.Color, detail_bg: vaxis.Cell.Color, success_green: vaxis.Cell.Color, primary_blue: vaxis.Cell.Color, progress_bar: *ProgressBar) !void {
+    // Left Pane: DDS Messages Table
+    const left_pane = win.child(.{
+        .x_off = 0,
+        .y_off = 0,
+        .width = split_width,
+        .height = content_height,
+    });
+
+    // Table header with progress bar
+    const table_header = left_pane.child(.{
+        .height = 3,
+    });
+    table_header.fill(.{ .style = .{ .bg = accent_cyan, .bold = true } });
+
+    const header_text = try fmt.allocPrint(alloc, "┃ LIVE DDS MESSAGES ({d} total)", .{dds_messages.len});
+    const table_header_segments = [_]vaxis.Cell.Segment{
+        .{ .text = header_text, .style = .{ .bg = accent_cyan, .bold = true, .fg = .{ .rgb = .{ 0, 0, 0 } } } },
+    };
+    _ = table_header.print(&table_header_segments, .{});
+
+    // Progress bar
+    const progress_text = try progress_bar.render(alloc);
+    defer alloc.free(progress_text);
+    const progress_segments = [_]vaxis.Cell.Segment{
+        .{ .text = "Processing: ", .style = .{ .bg = accent_cyan, .fg = .{ .rgb = .{ 0, 0, 0 } } } },
+        .{ .text = progress_text, .style = .{ .bg = accent_cyan, .fg = success_green } },
+        .{ .text = try fmt.allocPrint(alloc, " {d:.1}%", .{(progress_bar.current / progress_bar.max) * 100}), .style = .{ .bg = accent_cyan, .fg = .{ .rgb = .{ 0, 0, 0 } } } },
+    };
+    _ = table_header.print(&progress_segments, .{ .row_offset = 1 });
+
+    // Table content
+    const table_content = left_pane.child(.{
+        .y_off = 3,
+        .height = content_height - 3,
+    });
+
+    if (dds_messages.len > 0) {
+        dds_tbl.active = true;
+        try vaxis.widgets.Table.drawTable(
+            alloc,
+            table_content,
+            dds_mal,
+            dds_tbl,
+        );
+    } else {
+        const no_data_segments = [_]vaxis.Cell.Segment{
+            .{ .text = "No DDS messages received yet...", .style = .{ .fg = .{ .rgb = .{ 150, 150, 150 } }, .italic = true } },
+            .{ .text = "\nWaiting for FastDDS data...", .style = .{ .fg = warning_yellow } },
+        };
+        _ = table_content.print(&no_data_segments, .{ .row_offset = 2, .col_offset = 2 });
+    }
+
+    // Animated separator
+    const separator = win.child(.{
+        .x_off = split_width,
+        .y_off = 0,
+        .width = 1,
+        .height = content_height,
+    });
+    const separator_colors = [_]vaxis.Cell.Color{ primary_blue, accent_cyan, success_green };
+    const sep_color = separator_colors[animation_frame / 20 % separator_colors.len];
+    separator.fill(.{ .char = .{ .grapheme = "┃", .width = 1 }, .style = .{ .fg = sep_color } });
+
+    // Right Pane: Message Details
+    const right_pane = win.child(.{
+        .x_off = split_width + 1,
+        .y_off = 0,
+        .width = win.width - split_width - 1,
+        .height = content_height,
+    });
+
+    // Detail header
+    const detail_header = right_pane.child(.{
+        .height = 1,
+    });
+    detail_header.fill(.{ .style = .{ .bg = warning_yellow, .bold = true } });
+    const detail_header_segments = [_]vaxis.Cell.Segment{
+        .{ .text = "┃ MESSAGE DETAILS & ANALYTICS", .style = .{ .bg = warning_yellow, .bold = true, .fg = .{ .rgb = .{ 0, 0, 0 } } } },
+    };
+    _ = detail_header.print(&detail_header_segments, .{});
+
+    // Detail content
+    const detail_content = right_pane.child(.{
+        .y_off = 1,
+        .height = content_height - 1,
+    });
+    detail_content.fill(.{ .style = .{ .bg = detail_bg } });
+
+    if (selected_message_idx < dds_messages.len) {
+        const message = dds_messages[selected_message_idx];
+        const detail_segments = try createDDSMessageDetailSegments(alloc, message, selected_message_idx, animation_frame, dds_tbl.sel_rows);
+        _ = detail_content.print(detail_segments, .{ .wrap = .word });
+    } else if (dds_messages.len > 0) {
+        const no_selection_segments = [_]vaxis.Cell.Segment{
+            .{ .text = "\n  📡 SELECT A MESSAGE", .style = .{ .bold = true, .fg = accent_cyan } },
+            .{ .text = "\n  Use ↑↓ keys to navigate through messages", .style = .{ .fg = .{ .rgb = .{ 150, 150, 150 } } } },
+        };
+        _ = detail_content.print(&no_selection_segments, .{});
+    }
 }
 
 // Users Tab - Enhanced split view with table and details
@@ -383,7 +704,7 @@ fn renderUsersTab(alloc: std.mem.Allocator, win: *vaxis.Window, demo_tbl: *vaxis
 }
 
 // Analytics Tab - Data visualization and metrics
-fn renderAnalyticsTab(alloc: std.mem.Allocator, win: *vaxis.Window, users_buf: []const User, animation_frame: u32, primary_blue: vaxis.Cell.Color, success_green: vaxis.Cell.Color, warning_yellow: vaxis.Cell.Color, danger_red: vaxis.Cell.Color) !void {
+fn renderAnalyticsTab(alloc: std.mem.Allocator, win: *vaxis.Window, dds_messages: []const DDSMessageDisplay, animation_frame: u32, primary_blue: vaxis.Cell.Color, success_green: vaxis.Cell.Color, warning_yellow: vaxis.Cell.Color, danger_red: vaxis.Cell.Color) !void {
     win.fill(.{ .style = .{ .bg = .{ .rgb = .{ 16, 16, 24 } } } });
 
     // Analytics Header
@@ -391,7 +712,7 @@ fn renderAnalyticsTab(alloc: std.mem.Allocator, win: *vaxis.Window, users_buf: [
         .height = 3,
     });
     header.fill(.{ .style = .{ .bg = primary_blue } });
-    const header_text = try fmt.allocPrint(alloc, "📊 REAL-TIME ANALYTICS DASHBOARD | Users: {d} | Frame: {d}", .{ users_buf.len, animation_frame });
+    const header_text = try fmt.allocPrint(alloc, "📊 REAL-TIME DDS ANALYTICS DASHBOARD | Messages: {d} | Frame: {d}", .{ dds_messages.len, animation_frame });
     const header_segments = [_]vaxis.Cell.Segment{
         .{ .text = header_text, .style = .{ .bg = primary_blue, .bold = true, .fg = .{ .rgb = .{ 255, 255, 255 } } } },
     };
@@ -405,12 +726,12 @@ fn renderAnalyticsTab(alloc: std.mem.Allocator, win: *vaxis.Window, users_buf: [
 
     const col_width = win.width / 4;
 
-    // Metric 1: User Count
+    // Metric 1: Message Count
     var metric1 = metrics_area.child(.{
         .width = col_width,
         .height = 8,
     });
-    try renderMetricCard(alloc, &metric1, "👥 Total Users", try fmt.allocPrint(alloc, "{d}", .{users_buf.len}), success_green);
+    try renderMetricCard(alloc, &metric1, "📡 Total Messages", try fmt.allocPrint(alloc, "{d}", .{dds_messages.len}), success_green);
 
     // Metric 2: Active Sessions (animated)
     var metric2 = metrics_area.child(.{
@@ -626,6 +947,73 @@ fn renderChart(alloc: std.mem.Allocator, win: *vaxis.Window, animation_frame: u3
         .{ .text = chart_line, .style = .{ .fg = primary_blue } },
     };
     _ = chart_content.print(&chart_segments, .{ .row_offset = 2, .col_offset = 2 });
+}
+
+fn createDDSMessageDetailSegments(alloc: std.mem.Allocator, message: DDSMessageDisplay, idx: usize, frame: u32, sel_rows: ?[]u16) ![]const vaxis.Cell.Segment {
+    const segments = try alloc.alloc(vaxis.Cell.Segment, 20);
+    var seg_idx: usize = 0;
+
+    segments[seg_idx] = .{ .text = "\n", .style = .{} };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = "  📡 DDS MESSAGE DETAILS", .style = .{ .bold = true, .fg = .{ .rgb = .{ 100, 200, 255 } } } };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = "\n  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n", .style = .{ .fg = .{ .rgb = .{ 100, 200, 255 } } } };
+    seg_idx += 1;
+
+    segments[seg_idx] = .{ .text = "  🆔 Message ID:   ", .style = .{ .bold = true, .fg = .{ .rgb = .{ 150, 150, 150 } } } };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = try fmt.allocPrint(alloc, "#{d}\n", .{message.id}), .style = .{ .fg = .{ .rgb = .{ 255, 150, 255 } } } };
+    seg_idx += 1;
+
+    segments[seg_idx] = .{ .text = "  📄 Content:      ", .style = .{ .bold = true, .fg = .{ .rgb = .{ 150, 150, 150 } } } };
+    seg_idx += 1;
+    const content_preview = if (message.content.len > 40)
+        try fmt.allocPrint(alloc, "{s}...\n", .{message.content[0..40]})
+    else
+        try fmt.allocPrint(alloc, "{s}\n", .{message.content});
+    segments[seg_idx] = .{ .text = content_preview, .style = .{ .fg = .{ .rgb = .{ 255, 255, 255 } } } };
+    seg_idx += 1;
+
+    segments[seg_idx] = .{ .text = "  ⏰ Timestamp:    ", .style = .{ .bold = true, .fg = .{ .rgb = .{ 150, 150, 150 } } } };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = try fmt.allocPrint(alloc, "{s}\n", .{message.formatted_time}), .style = .{ .fg = .{ .rgb = .{ 255, 200, 100 } } } };
+    seg_idx += 1;
+
+    segments[seg_idx] = .{ .text = "  📊 Status:       ", .style = .{ .bold = true, .fg = .{ .rgb = .{ 150, 150, 150 } } } };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = try fmt.allocPrint(alloc, "{s}\n\n", .{message.status}), .style = .{ .fg = .{ .rgb = .{ 100, 255, 100 } } } };
+    seg_idx += 1;
+
+    segments[seg_idx] = .{ .text = "  📊 LIVE ANALYTICS", .style = .{ .bold = true, .fg = .{ .rgb = .{ 255, 200, 100 } } } };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = "\n  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n", .style = .{ .fg = .{ .rgb = .{ 255, 200, 100 } } } };
+    seg_idx += 1;
+
+    // Message latency simulation
+    const latency = (frame / 10 + idx) % 100;
+    segments[seg_idx] = .{ .text = "  ⚡ Latency:       ", .style = .{ .bold = true, .fg = .{ .rgb = .{ 150, 150, 150 } } } };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = try fmt.allocPrint(alloc, "{d}ms\n", .{latency}), .style = .{ .fg = if (latency > 50) .{ .rgb = .{ 255, 100, 100 } } else .{ .rgb = .{ 100, 255, 100 } } } };
+    seg_idx += 1;
+
+    // Processing time simulation
+    const processing_time = (frame / 15 + idx * 3) % 50;
+    segments[seg_idx] = .{ .text = "  🔄 Processing:    ", .style = .{ .bold = true, .fg = .{ .rgb = .{ 150, 150, 150 } } } };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = try fmt.allocPrint(alloc, "{d}ms\n\n", .{processing_time}), .style = .{ .fg = .{ .rgb = .{ 200, 200, 255 } } } };
+    seg_idx += 1;
+
+    const selection_info = if (sel_rows != null and sel_rows.?.len > 0)
+        try fmt.allocPrint(alloc, "  ✓ {d} messages selected for batch processing", .{sel_rows.?.len})
+    else
+        "  ○ No messages selected - use Space to select";
+
+    segments[seg_idx] = .{ .text = "  📊 SELECTION STATUS\n", .style = .{ .bold = true, .fg = .{ .rgb = .{ 255, 150, 255 } } } };
+    seg_idx += 1;
+    segments[seg_idx] = .{ .text = selection_info, .style = .{ .fg = .{ .rgb = .{ 200, 200, 200 } } } };
+    seg_idx += 1;
+
+    return segments[0..seg_idx];
 }
 
 fn createDetailSegments(alloc: std.mem.Allocator, user: User, idx: usize, frame: u32, sel_rows: ?[]u16) ![]const vaxis.Cell.Segment {
