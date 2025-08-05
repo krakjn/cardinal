@@ -4,13 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseFast });
 
-    // Add libvaxis dependency
-    const vaxis_dep = b.dependency("vaxis", .{
+    const vaxis = b.dependency("vaxis", .{
         .target = target,
         .optimize = optimize,
     });
 
-    // Main executable
     const exe = b.addExecutable(.{
         .name = "cardinal",
         .root_source_file = b.path("src/main.zig"),
@@ -20,10 +18,10 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add vaxis module
-    exe.root_module.addImport("vaxis", vaxis_dep.module("vaxis"));
+    exe.root_module.addImport("vaxis", vaxis.module("vaxis"));
 
-    // Link system libraries
-    exe.linkSystemLibrary("stdc++");
+    // // Link system libraries
+    // exe.linkSystemLibrary("stdc++");
 
     // Add to build outputs
     b.installArtifact(exe);

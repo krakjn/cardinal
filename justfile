@@ -1,15 +1,18 @@
 #!/usr/bin/env just --justfile
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
+CWD := source_directory()
+
 _:
   just --list
 
 
 image:
-    docker build -t cardinal - < Dockerfile
+    docker build -t cardinal .
 
 _mkdirs:
     @mkdir -p .cache/{go,zig,rust}
 
-DOCKER_RUN := "docker run --rm --tty -v $(pwd):/workspace -v $(pwd)/.cache/go:/root/.cache/go -v $(pwd)/.cache/zig:/root/.cache/zig -v $(pwd)/.cache/rust:/root/.cargo/registry -w /workspace cardinal"
+DOCKER_RUN := "docker run --rm --tty -v {{ CWD }}:/workspace -v {{ CWD }}/.cache/go:/root/.cache/go -v {{ CWD }}/.cache/zig:/root/.cache/zig -v {{ CWD }}/.cache/rust:/root/.cargo/registry -w /workspace cardinal"
 
 build ARG='all': _mkdirs
     #!/usr/bin/env bash
@@ -52,20 +55,20 @@ _rust-run:
 
 run ARG:
     docker run --rm -it \
-        -v $(pwd):/workspace \
-        -v $(pwd)/.cache/go:/root/.cache/go \
-        -v $(pwd)/.cache/zig:/root/.cache/zig \
-        -v $(pwd)/.cache/rust:/root/.cargo/registry \
+        -v {{ CWD }}:/workspace \
+        -v {{ CWD }}/.cache/go:/root/.cache/go \
+        -v {{ CWD }}/.cache/zig:/root/.cache/zig \
+        -v {{ CWD }}/.cache/rust:/root/.cargo/registry \
         -w /workspace \
         cardinal \
         just _{{ ARG }}-run
 
 shell:
     docker run --rm -it \
-        -v $(pwd):/workspace \
-        -v $(pwd)/.cache/go:/root/.cache/go \
-        -v $(pwd)/.cache/zig:/root/.cache/zig \
-        -v $(pwd)/.cache/rust:/root/.cargo/registry \
+        -v {{ CWD }}:/workspace \
+        -v {{ CWD }}/.cache/go:/root/.cache/go \
+        -v {{ CWD }}/.cache/zig:/root/.cache/zig \
+        -v {{ CWD }}/.cache/rust:/root/.cargo/registry \
         -w /workspace \
         cardinal \
         bash
