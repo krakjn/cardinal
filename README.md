@@ -1,83 +1,50 @@
-# Cardinal - Lipgloss TUI Demo
+# Cardinal - Multi-Language FastDDS TUI Showcase
 
-A beautiful terminal user interface demo built with Go, showcasing:
-- **Lipgloss** for stunning TUI styling
-- **Bubble Tea** for interactive terminal apps  
-- **Mock DDS messaging** between two goroutines
-- **Docker** for consistent development environment
+A beautiful, multi-language demonstration of FastDDS (Fast Data Distribution Service) integration with stunning terminal user interfaces. Features a sophisticated Zig TUI built with libvaxis, showcasing real-time message streaming, progress indicators, and advanced UI components.
 
-## 🚀 Quick Start
+## Featured Technologies
 
-```bash
-# Build the application
-just build
+- **Zig + libvaxis** - Stunning terminal UI with live DDS message display
+- **Rust + ratatui** - High-performance FastDDS bindings and TUI
+- **Go + lipgloss** - FastDDS integration with elegant interfaces  
+- **FastDDS** - Real-time data distribution service
+- **Docker** - Consistent cross-platform development
 
-# Run the application  
-just run
+## Quick Start
+| Command | Description |
+|---------|-------------|
+| `just image` | Build the Docker image |
+| `just build [lang]` | Build specific language or all implementations |
+| `just run <lang>` | Run the TUI for specified language (zig/rust/go) |
+| `just clean` | Clean build artifacts and containers |
+| `just shell` | Enter development container |
+| `just _lib ` | (in container) Build C++ FastDDS library |
+| `just _zig ` | (in container) Build Zig TUI |
+| `just _rust` | (in container) Build Rust TUI   |
+| `just _go  ` | (in container) Build Go TUI |
 
-# Or do both in one command
-just dev
-```
-
-## 📋 Commands
-
-- `just build` - Build the application
-- `just run` - Run the application
-- `just dev` - Build and run (development cycle)
-- `just shell` - Start development shell
-- `just clean` - Clean up Docker resources
-
-## 🎯 What It Does
-
-The application demonstrates a two-threaded architecture:
-
-1. **Publisher Thread**: Sends "Hello World" messages every 2 seconds
-2. **TUI Thread**: Displays messages in a beautiful terminal interface using Lipgloss
-
-Messages are passed between threads using a mock DDS (Data Distribution Service) system.
 
 ## 🛠️ Development
 
-The entire development environment runs in Docker for consistency across machines.
-
-### Requirements
-
+### **Requirements**
 - [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
 - [Just](https://github.com/casey/just) (command runner)
 
-### Project Structure
+## 🎯 Message Flow
 
+1. **Mock Publisher** generates realistic sensor data every second
+2. **FastDDS** handles message distribution between processes
+3. **TUI Subscriber** receives and displays messages in real-time
+4. **Progress Indicators** show processing status and throughput
+5. **Analytics Engine** computes real-time metrics and visualizations
+
+### **Sample Messages**
 ```
-cardinal/
-├── main.go              # Main application
-├── go.mod               # Go dependencies
-├── Dockerfile           # Development environment
-├── docker-compose.yml   # Container orchestration
-├── justfile             # Command runner
-└── README.md            # This file
+📡 Sensor temperature: 23.5°C
+📍 GPS coordinates: 40.7128, -74.0060  
+✅ System status: All systems operational
+🔋 Battery level: 85%
+📶 Network connectivity: Strong
+💾 Memory usage: 45%
+⚡ CPU load: 12%
 ```
-
-## 🎨 Features
-
-- **Beautiful TUI**: Styled with Lipgloss borders, colors, and layouts
-- **Real-time Updates**: Live message display with timestamps
-- **Graceful Shutdown**: Clean exit with Ctrl+C or 'q'
-- **Containerized**: Consistent development environment
-
-## 🧩 Architecture
-
-```
-┌─────────────────┐    Mock DDS    ┌─────────────────┐
-│  Publisher      │ ────Channel───▶│ TUI Subscriber  │
-│  (Goroutine)    │                │ (Bubble Tea)    │
-│                 │                │                 │
-│ • Hello World   │                │ • Lipgloss UI   │
-│ • Every 2s      │                │ • Live Updates  │
-│ • Timestamps    │                │ • Styling       │
-└─────────────────┘                └─────────────────┘
-```
-
-## 📄 License
-
-MIT License - feel free to use this as a starting point for your own TUI applications!
