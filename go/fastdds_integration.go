@@ -1,11 +1,14 @@
+//go:build fastdds
+// +build fastdds
+
 package main
 
 /*
-#cgo CFLAGS:
-#cgo CPPFLAGS: -I/usr/local/include -I/workspace/lib
+#cgo CFLAGS: -I../install/include -I../lib
+#cgo CPPFLAGS: -I../install/include -I../lib
 #cgo CXXFLAGS: -std=c++17
-#cgo LDFLAGS: -L/usr/local/lib -L/workspace/build -lcardinal-fastdds -lfastdds -lfastcdr -lstdc++
-#include "fastdds.h"
+#cgo LDFLAGS: -L../install/lib -lcardinal-fastdds -lfastdds -lfastcdr -lstdc++
+#include "../lib/fastdds.h"
 
 #include <stdlib.h>
 */

@@ -1,13 +1,10 @@
-# cache for faster builds
 .cache/
+.zig-cache/
 
-# Build artifacts
 **/build/
+# Local install directory (keeps libraries contained)
+install/
 
-# Zig build artifacts
-zig/zig-out/
-zig/.zig-cache/
-zig/.cache/
-
-# Rust build artifacts
-rust/target/
+# Cloned dependencies (FastDDS sources)
+Fast-DDS/
+Fast-CDR/

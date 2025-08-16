@@ -22,16 +22,50 @@ build ARG='all': _mkdirs
         {{ DOCKER_RUN }} just _{{ ARG }}
     fi
 
+# Native development commands (no Docker)
+native-lib:
+    #!/usr/bin/env bash
+    echo "🔨 Building FastDDS libraries natively with Zig..."
+    mkdir -p install/include install/lib
+    zig build lib
+
+native-go:
+    #!/usr/bin/env bash
+    echo "🔨 Building Go app natively with FastDDS support..."
+    cd go && go build -tags fastdds -o build/cardinal .
+
+native-go-mock:
+    #!/usr/bin/env bash
+    echo "🔨 Building Go app natively (mock-only)..."
+    cd go && go build -o build/cardinal .
+
+native-all: native-lib native-go
+    echo "✅ Native build complete!"
+
+native-demo: native-go-mock
+    echo "🚀 Running Cardinal with enhanced TUI..."
+    ./go/build/cardinal
+
 _lib:
-    mkdir -p build
-    g++ -I/usr/local/include -std=c++17 -fPIC -c lib/fastdds.cpp -o build/fastdds.o
-    ar rcs build/libcardinal-fastdds.a build/fastdds.o
+    #!/usr/bin/env bash
+    # Build FastDDS and Cardinal library using Zig natively
+    mkdir -p install/include install/lib
+    zig build lib --cache-dir .cache/zig
+    echo "✅ Built FastDDS libraries to install/ directory"
 
 _go:
     #!/usr/bin/env bash
     cd go
     mkdir -p build
-    CGO_CFLAGS="" CGO_CXXFLAGS="-std=c++17" go build -o build/cardinal .
+    # Build with FastDDS support using our local libraries
+    go build -tags fastdds -o build/cardinal .
+
+_go-mock:
+    #!/usr/bin/env bash
+    cd go
+    mkdir -p build
+    # Build without FastDDS (mock-only version for quick development)
+    go build -o build/cardinal .
 
 _go-run:
     ./go/build/cardinal
