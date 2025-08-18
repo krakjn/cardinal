@@ -7,7 +7,7 @@ package main
 #cgo CFLAGS: -I../install/include -I../lib
 #cgo CPPFLAGS: -I../install/include -I../lib
 #cgo CXXFLAGS: -std=c++17
-#cgo LDFLAGS: -L../install/lib -lcardinal-fastdds -lfastdds -lfastcdr -lstdc++
+#cgo LDFLAGS: -L../install/lib -L../build -lcardinal-fastdds -lfastdds -lfastcdr -lstdc++
 #include "../lib/fastdds.h"
 
 #include <stdlib.h>
